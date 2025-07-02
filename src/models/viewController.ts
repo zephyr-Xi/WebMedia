@@ -1,7 +1,7 @@
 // 视图控制器 负责根据模式选择控制录制容器内的媒体流渲染
 // 目前支持模式 ：仅摄像头（单）、仅麦克风、仅屏幕（单）、单摄像头&单屏幕
 // 后续可以扩展为多摄像头、多麦克风、多屏幕等模式
-import SoundWave from './soundWave';
+import AudioWave from './soundWave';
 
 type ViewModeType = 'only-camera' | 'only-microphone' | 'only-screen' | 'camera&screen';
 type NodeType = 'video' | 'canvas';
@@ -128,7 +128,7 @@ export default class ViewController {
       styles
     ) as HTMLCanvasElement;
 
-    const audioWave = new SoundWave(node, {
+    const audioWave = new AudioWave(node, {
       fillStyle: '#73dbc0',
       spacing: 16,
       barWidth: 10
@@ -190,4 +190,4 @@ export default class ViewController {
 
     return canvas;
   }
-} 
+}
