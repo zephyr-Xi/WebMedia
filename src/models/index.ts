@@ -3,6 +3,7 @@ import { useSelfStore } from './store';
 import DeviceManager from './deviceManager';
 import PermissionManager from './permissionManager';
 import Screen from './screen';
+import Camera from './camera';
 import Microphone from './microphone';
 import ViewController from './viewController';
 
@@ -13,6 +14,7 @@ export default class RecorderApp {
   deviceManager: DeviceManager | undefined;
   permissionManager: PermissionManager | undefined;
   screen: Screen | undefined;
+  camera: Camera | undefined;
   microphone: Microphone | undefined;
   viewController: ViewController | undefined;
   viewRoot: HTMLElement | null = null;
@@ -30,104 +32,147 @@ export default class RecorderApp {
     this.initViewController(viewRoot); // 初始化视图控制器
   }
 
-  async open(mode: 'only-screen' | 'only-microphone' | 'camera&screen' = 'only-screen') {
-    if (mode === 'only-screen') {
-      await this.openScreen(); // 打开屏幕流
-      const stream = (await this.screen?.getStream()) as any; // 获取屏幕流
-      console.info('xyl recorder app log -- 屏幕流获取成功:', stream);
+  async clone(device: 'screen' | 'microphone' | 'camera') {
+    if (device === 'screen') {
+      await this.closeScreen();
+    }
+    if (device === 'camera') {
+      if (!this.camera) return;
+      this.camera.destroy(); // 销毁旧的屏幕
+    }
+    if (device === 'microphone') {
+      if (!this.microphone) return;
+      this.microphone.stop(); // 销毁旧的麦克风
+    }
+  }
 
-      if (!stream) {
+  async open(
+    mode: 'only-screen' | 'only-microphone' | 'camera&screen' | 'only-camera' = 'only-screen'
+  ) {
+    if (mode === 'only-screen') {
+      const openScreenState = await this.openScreen(); // 打开屏幕流
+      if (!openScreenState) {
         console.error('xyl recorder app log -- 屏幕流获取失败');
         return;
       }
+
+      const stream = (await this.screen?.getStream()) as any; // 获取屏幕流
       console.info('xyl recorder app log -- 屏幕流获取成功:', stream);
       this.viewController?.render(mode, { screen: stream as MediaStream }); // 渲染屏幕流到视图控制器
       return;
     }
     if (mode === 'only-microphone') {
-      await this.openMicrophone(); // 打开麦克风流
-      const stream = await this.microphone?.getStream(); // 获取麦克风流
-      if (!stream) {
+      const openMicrophoneState = await this.openMicrophone(); // 打开麦克风流
+      if (!openMicrophoneState) {
         console.error('xyl recorder app log -- 麦克风流获取失败');
         return;
       }
+
+      const stream = await this.microphone?.getStream(); // 获取麦克风流
       console.info('xyl recorder app log -- 麦克风流获取成功:', stream);
       this.viewController?.render(mode, { microphone: stream as MediaStream }); // 渲染麦克风流到视图控制器
       return;
     }
     if (mode === 'camera&screen') {
-      await this.openCamera(); // 打开摄像头流
-      // const res = await Promise.allSettled([
-      //   this.openScreen() // 打开屏幕
-      //   // this.openCamera() // 打开摄像头流
-      // ]);
-      // console.log('xyl recorder app log -- 打开屏幕和摄像头流结果:', res);
-      // const streams = {
-      //   screenStream: null as MediaStream | null,
-      //   cameraStream: null as MediaStream | null
-      // } as any;
-      // res.forEach(async (r, i) => {
-      //   if (r.status === 'fulfilled') {
-      //     console.info('xyl recorder app log -- 打开流成功:', r.value);
-      //     if (i === 0) {
-      //       streams.screenStream = (await this.screen?.getStream()) as any; // 获取屏幕流
-      //     } else {
-      //       streams.cameraStream = r.value as MediaStream; // 第二个是摄像头流
-      //     }
-      //   }
-      // });
-      // if (!streams.screenStream || !streams.cameraStream) {
-      //   this.viewController?.render('only-screen', {
-      //     screen: streams?.screenStream || (streams?.cameraStream as MediaStream)
-      //   }); // 渲染屏幕流到视图控制器
-      //   return;
-      // }
-      // this.viewController?.render(mode, streams); // 渲染屏幕流到视图控制器
-      // return;
+      const openScreenState = await this.openScreen(); // 打开屏幕流
+      const openCameraState = await this.openCamera(); // 打开摄像头流
+
+      const streams = {
+        screen: null as MediaStream | null,
+        camera: null as MediaStream | null
+      } as any;
+
+      openScreenState && (streams.screen = (await this.screen?.getStream()) as any); // 获取屏幕流
+      openCameraState && (streams.camera = (await this.camera?.getStream()) as MediaStream); // 获取摄像头流
+      console.log('xyl recorder app log -- 打开屏幕和摄像头流结果:', streams);
+
+      if (!streams.screen || !streams.camera) {
+        // 当有一个流获取失败时 只渲染一个视频媒体流
+        this.viewController?.render('only-screen', {
+          screen: streams?.screen || (streams?.camera as MediaStream)
+        }); // 渲染屏幕流到视图控制器
+        return;
+      }
+      this.viewController?.render(mode, streams); // 渲染屏幕流到视图控制器
+      return;
+    }
+    if (mode === 'only-camera') {
+      const openCameraState = await this.openCamera(); // 打开摄像头流
+      if (!openCameraState) {
+        console.error('xyl recorder app log -- 摄像头流获取失败');
+        return;
+      }
+      const stream = await this.camera?.getStream(); // 获取摄像头流
+      console.info('xyl recorder app log -- 摄像头流获取成功:', stream);
+      this.viewController?.render(mode, { camera: stream as MediaStream }); // 渲染摄像头流到视图控制器
+      return;
     }
   }
   // ======= camera ==========
 
   async openCamera() {
-    if (!this.store) throw new Error('Store is not initialized. Please call init() first.');
-    this.store.cameraStatus = 'opening'; // 设置摄像头状态为打开中
-
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: { echoCancellation: true, noiseSuppression: true }
-      });
-      console.log('xyl recorder app log -- 摄像头流已打开:', stream);
-      return stream;
+      if (!this.store) throw new Error('Store is not initialized. Please call init() first.');
+      this.store.cameraStatus = 'opening'; // 设置摄像头状态为打开中
+
+      if (!this.camera) this.camera = new Camera();
+      this.camera.isActive() && this.camera.destroy(); // 清除旧的摄像头流
+      await this.camera.create();
+
+      console.info('xyl recorder app log -- 摄像头流已打开:');
+      this.store.cameraStatus = 'opened'; // 设置摄像头状态为已打开
+      return true;
     } catch (error) {
       console.error('xyl recorder app log -- 摄像头流打开失败:', error);
-      this.store.cameraStatus = 'init'; // 设置摄像头状态为初始化
+      if (this.store) this.store.cameraStatus = 'init'; // 设置摄像头状态为已关闭
+      return false;
     }
   }
 
   // ======= microphone ==========
 
   async openMicrophone() {
-    if (!this.store) throw new Error('Store is not initialized. Please call init() first.');
-    this.store.microphoneStatus = 'opening'; // 设置屏幕状态为打开中
+    try {
+      if (!this.store) throw new Error('Store is not initialized. Please call init() first.');
+      this.store.microphoneStatus = 'opening'; // 设置麦克风状态为打开中
 
-    if (!this.microphone) this.microphone = new Microphone();
-    await this.microphone.start();
+      if (!this.microphone) this.microphone = new Microphone();
+      await this.microphone.start();
 
-    this.store.microphoneStatus = 'opened'; // 设置屏幕状态为已打开
+      this.store.microphoneStatus = 'opened'; // 设置麦克风状态为已打开
+      return true;
+    } catch (error) {
+      console.error('xyl recorder app log -- 麦克风流打开失败:', error);
+      if (this.store) this.store.microphoneStatus = 'init';
+      return false;
+    }
   }
 
   // ======== Screen ===========
   async openScreen() {
-    if (!this.store) throw new Error('Store is not initialized. Please call init() first.');
-    this.store.screenStatus = 'opening'; // 设置屏幕状态为打开中
+    try {
+      if (!this.store) throw new Error('Store is not initialized. Please call init() first.');
+      this.store.screenStatus = 'opening'; // 设置屏幕状态为打开中
 
-    if (!this.screen) this.screen = new Screen();
-    this.screen.isActive() && this.screen.destroy(); // 清除旧的屏幕流
-    await this.screen.create();
+      if (!this.screen) this.screen = new Screen();
+      this.screen.isActive() && this.screen.destroy(); // 清除旧的屏幕流
+      await this.screen.create();
+      // this.screen.on('inactive', () => console.info('xyl recorder app log -- 屏幕流已关闭'));
+      // this.screen.on('addtrack', (e: any) =>
+        // console.info('xyl recorder app log -- 屏幕流添加轨道:', e)
+      // );
+      // this.screen.on('removetrack', (e: any) =>
+        // console.info('xyl recorder app log -- 屏幕流移除轨道:', e)
+      // );
 
-    console.info('xyl recorder app log -- 屏幕流已打开:');
-    this.store.screenStatus = 'opened'; // 设置屏幕状态为已打开
+      console.info('xyl recorder app log -- 屏幕流已打开:');
+      this.store.screenStatus = 'opened'; // 设置屏幕状态为已打开
+      return true;
+    } catch (error) {
+      console.error('xyl recorder app log -- 屏幕流打开失败:', error);
+      if (this.store) this.store.screenStatus = 'init'; // 设置屏幕状态为已关闭
+      return false;
+    }
   }
 
   closeScreen() {
